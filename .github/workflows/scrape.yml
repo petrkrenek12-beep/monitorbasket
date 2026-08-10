@@ -1,0 +1,40 @@
+name: Basket novinky monitor
+
+on:
+  schedule:
+    # Kazdych 15 minut. GitHub muze pri vetsim zatizeni spousteni mirne
+    # zpozdit, ale pro tenhle ucel to nevadi.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}  # umoznuje rucni spusteni z GitHub UI (zalozka Actions)
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repozitare
+        uses: actions/checkout@v4
+
+      - name: Nastaveni Pythonu
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalace zavislosti
+        run: pip install -r requirements.txt
+
+      - name: Spusteni scraperu
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scraper.py
+
+      - name: Ulozeni stavu (seen.json) zpet do repozitare
+        run: |
+          git config user.name "basket-monitor-bot"
+          git config user.email "actions@github.com"
+          git add seen.json
+          git diff --quiet --cached || git commit -m "Aktualizace stavu [skip ci]"
+          git push
