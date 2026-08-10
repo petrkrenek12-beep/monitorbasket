@@ -17,7 +17,10 @@ import time
 from urllib.parse import urljoin
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 STATE_FILE = "seen.json"
 
@@ -35,23 +38,12 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # ---------------------------------------------------------------------------
 # Konfigurace webu
 # ---------------------------------------------------------------------------
-# Kazdy web ma:
-#   name       - jak se bude jmenovat v notifikaci
-#   list_url   - stranka, kde se vypisuji novinky/clanky
-#   base_url   - pro slozeni relativnich odkazu na absolutni
-#   pattern    - regex, ktery pozna odkaz na clanek (aplikuje se na href)
-#   exclude    - (volitelne) seznam slugu/kousku url, ktere se maji vyradit
-#                (pouziva se hlavne u webu, kde clanky nemaji vlastni
-#                predponu v URL - viz BK Usti, BK Opava)
-#   min_hyphens- (volitelne) minimalni pocet pomlcek ve slugu, aby se
-#                odkaz povazoval za clanek (pomaha odfiltrovat menu)
-
 SITES = [
     {
         "name": "ERA Basketball Nymburk",
-        "list_url": "https://www.nymburk.basketball/archiv.asp",
+        "list_url": "https://www.nymburk.basketball/",
         "base_url": "https://www.nymburk.basketball",
-        "pattern": r"/clanek\.asp\?[^\"']*id=[\w\-]+",
+        "pattern": r"clanek\.asp\?[^\"']*id=[\w\-]+",
     },
     {
         "name": "BK GAPA Hradec Kralove",
@@ -79,7 +71,7 @@ SITES = [
     },
     {
         "name": "SLUNETA Usti nad Labem",
-        "list_url": "https://www.bkusti.cz/rub-archiv",
+        "list_url": "https://www.bkusti.cz/",
         "base_url": "https://www.bkusti.cz",
         "pattern": r"^/[\w\-]+/?$",
         "exclude_prefixes": ["rub-", "tymy-", "kontakt", "prispevky", "haly_"],
@@ -128,9 +120,10 @@ SITES = [
     },
     {
         "name": "BK ARMEX ENERGY Decin",
-        "list_url": "https://www.bkdecin.cz/aktuality/",
-        "base_url": "https://www.bkdecin.cz",
+        "list_url": "https://bkdecin.cz/aktuality/",
+        "base_url": "https://bkdecin.cz",
         "pattern": r"/aktuality/[\w\-]+-\d+/?",
+        "verify_ssl": False,
     },
     {
         "name": "BK Lokomotiva Plzen",
@@ -201,7 +194,6 @@ def extract_articles(html, site):
         href = a["href"]
 
         if is_flat_slug_site:
-            # u webu s "flat" slugy (bkusti, bkopava) kontrolujeme jen cestu bez domeny
             path = urlparse(href).path if href.startswith("http") else href
             if not pattern.match(path):
                 continue
@@ -215,8 +207,6 @@ def extract_articles(html, site):
         title = a.get_text(strip=True)
         if not title:
             continue
-        # u nekterych webu jsou v odkazu i datum/kategorie slepene s titulkem,
-        # necháváme tak jak je - lepsi mit surovy text nez nic
         if full_url not in found or len(title) > len(found[full_url]):
             found[full_url] = title
     return list(found.items())
@@ -227,8 +217,11 @@ def check_site(site, state):
     seen_urls = set(state.get(name, []))
     is_first_run = len(seen_urls) == 0
 
+    verify_ssl = site.get("verify_ssl", True)
     try:
-        resp = requests.get(site["list_url"], headers=HEADERS, timeout=25)
+        resp = requests.get(
+            site["list_url"], headers=HEADERS, timeout=25, verify=verify_ssl
+        )
         resp.raise_for_status()
     except Exception as e:
         print(f"[{name}] chyba pri stahovani: {e}")
@@ -249,8 +242,6 @@ def check_site(site, state):
     updated_seen = seen_urls | current_urls
 
     if is_first_run:
-        # Pri prvnim behu si jen zapamatujeme aktualni clanky, neposilame
-        # notifikace za vsechny (jinak by prisel spam pri prvnim spusteni).
         print(f"[{name}] prvni beh - ukladam {len(current_urls)} clanku jako zakladni stav, bez notifikaci")
         return updated_seen, []
 
@@ -270,7 +261,7 @@ def main():
             message = f"🏀 <b>{site['name']}</b>\n{title}\n{url}"
             send_telegram(message)
             print(f"[{site['name']}] NOVY CLANEK: {title} -> {url}")
-            time.sleep(1)  # sance na Telegram rate limit
+            time.sleep(1)
 
     save_state(state)
     print(f"Hotovo. Novych clanku celkem: {total_new}")
